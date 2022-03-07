@@ -1,0 +1,276 @@
+---
+title: "ECO 395 Homework 2: Mohammed Alqahtani"
+output: md_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# **Problem 1: visualization**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(RColorBrewer)
+library(modelr)
+library(rsample)
+library(mosaic)
+library(fastDummies)
+library(caret)
+library(foreach)
+library(parallel)
+capmetro_UT <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\capmetro_UT.csv')
+capmetro_UT = mutate(capmetro_UT,
+                     day_of_week = factor(day_of_week,
+                                          levels=c("Mon", "Tue", "Wed","Thu", "Fri", "Sat", "Sun")),
+                     month = factor(month,
+                                    levels=c("Sep", "Oct","Nov")))
+
+data_ <- capmetro_UT %>%
+  group_by(hour_of_day, day_of_week, month) %>%
+  summarize(boarding_average = mean(boarding)) 
+head(data_)
+
+ggplot(data_) +
+ aes(x = hour_of_day, y = boarding_average, colour = month, group = month) +
+ geom_line(size = 1L) +
+ scale_color_hue(direction = -1) +
+ labs(x = "Hour of Day", y = "Average Boarding", title = "Average Boarding of Capital Metro",  caption = "Most of the peak hour is between 3:00 pm and 4:30 pm at all the weekdays on the 3 different months. However, we can observe that it is almost a flat line in the weekend with a very low boarding riders to the bus network. That's expected since huge proportion of the riders are UT students, and there are no classes on the weekends. An intresting observation is how the average boarding riders on Monday in Sepetember is less than on the other 2 months. That's because of the Labor Day holiday which is on the first Monday of every September. So that's is reflected on the graph since no classes on that day and many employees have holidays as well. A similar case goes with Wednesday, Thursday, and Friday in Novermber. We can notice how lower it is comparing with the average boardings on the other weekdays in Novermber. That's simply because of the Thanksgiving Holiday which there are no classes as well on those days. Those holidays affect the average lines and makes it lower than its peers.") +
+ theme_minimal() +
+ theme(plot.title = element_text(face = "bold", hjust = 0.5)) +
+ facet_wrap(vars(day_of_week))
+
+ggplot(capmetro_UT) +
+ aes(x = temperature, y = boarding, colour = weekend) +
+ geom_point(shape = "circle", 
+ size = 1.5) +
+ scale_color_hue(direction = 1) +
+ labs(x = "Temperature (°F)", y = "Boarding", title = "Capital Metro: Number of Boardings by Temperature Level", caption = 'Highest Boardings are during summer time and week days.') +
+ theme_minimal() +
+ theme(plot.title = element_text(face = "bold", hjust = 0.5)) +
+ facet_wrap(vars(hour_of_day))
+```
+
+#**Problem 2: Saratoga house prices**
+
+## *Model 1*
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+data(SaratogaHouses)
+
+saratoga_split = initial_split(SaratogaHouses, prop = 0.8)
+saratoga_train = training(saratoga_split)
+saratoga_test = testing(saratoga_split)
+
+lm_class = lm(price ~ . - pctCollege - sewer - waterfront - landValue - newConstruction, data=saratoga_train)
+
+coef(lm_class) %>% round(0)
+
+rmse(lm_class, saratoga_test)
+```
+RMSE is 73443.63
+
+##*Model 2*
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+saratoga_split = initial_split(SaratogaHouses, prop = 0.8) 
+saratoga_train = training(saratoga_split)
+saratoga_test = testing(saratoga_split)
+
+Xtrain = model.matrix(~ age + livingArea  + bedrooms + bathrooms- 1, data=saratoga_train) 
+Xtest = model.matrix(~ age + livingArea + bedrooms + bathrooms - 1, data=saratoga_test)
+
+ytrain = saratoga_train$price 
+ytest = saratoga_test$price
+
+scale_train = apply(Xtrain, 2, sd)  
+Xtilde_train = scale(Xtrain, scale = scale_train)
+Xtilde_test = scale(Xtest, scale = scale_train)
+
+
+K_folds = 5
+saratoga_folds = crossv_kfold(SaratogaHouses, k=K_folds)
+
+k_grid = seq(2, 100, by=2)
+
+cv_grid = foreach(k = k_grid, .combine='rbind') %do% {
+  models = map(saratoga_folds$train, ~ knnreg(price ~  age +  livingArea + bedrooms + bathrooms - 1, k=k, data = ., use.all=FALSE))
+  errs = map2_dbl(models, saratoga_folds$test, modelr::rmse)
+  c(k=k, err = mean(errs), std_err = sd(errs)/sqrt(K_folds))
+  } %>% as.data.frame
+
+ggplot(cv_grid) +
+  geom_point(aes(x=k, y=err)) +
+  geom_errorbar(aes(x=k, ymin = err-std_err, ymax = err+std_err)) +
+  labs(y="RMSE", title="RMSE vs k for KNN regression: Saratoga, NY")
+
+min(errs)
+
+```   
+Minimum error from the list is 61744.19 better than previous model.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+k_best = k_grid[which.min(cv_grid$err)]
+knn_best = knnreg(price ~  age +  livingArea + bedrooms + bathrooms - 1, k=k_best, data = SaratogaHouses)
+
+SaratogaHouses  = SaratogaHouses %>%
+  mutate(price_predKNN = predict(knn_best, SaratogaHouses)) %>%
+   mutate(price_predlm_class = predict(lm_class, SaratogaHouses)) 
+
+pricing_models = SaratogaHouses %>%
+  select(price, price_predlm_class, price_predKNN )
+```
+
+# **Problem 3: Classification and retrospective sampling**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+german_credit <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\german_credit.csv')
+xtabs(~Default + history, data = german_credit)
+
+prop_def = xtabs(~Default + history, data = german_credit) %>%
+  prop.table(margin = 2) %>%
+  data.frame()
+
+ggplot(prop_def) +
+ aes(x = Default, fill = history, colour = history, weight = Freq) +
+ geom_bar() +
+ scale_fill_manual(values = c(good = "#003C30", 
+poor = "#F2DA04", terrible = "#C43D0E")) +
+ scale_color_manual(values = c(good = "#003C30", poor = "#F2DA04", 
+terrible = "#C43D0E")) +
+ labs(title = "Probability of Default Conditional on Borrowers' History") +
+ theme_minimal() +
+ facet_wrap(vars(history))
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+logit_def = glm(Default ~ duration + amount + installment + age + history + purpose + foreign, data=german_credit, family='binomial')
+
+coef(logit_def) %>% round(2)
+
+def_history = german_credit %>%
+  mutate(default_pred = predict(logit_def, german_credit)) %>%
+  mutate(Default_Odds = exp(default_pred))
+  
+  def_history = def_history %>%
+  select(history, Default, default_pred, Default_Odds)
+  data.frame()
+  
+ggplot(def_history) +
+ aes(x = history, y = Default_Odds, colour = history) +
+ geom_jitter(size = 1.5) +
+ scale_color_manual(values = c(good = "#003C30", poor = "#DBC711", terrible = "#C02B05")) +
+ labs(x = "History", 
+ y = "Odds", title = "Expected Odds of Default based on Borrowers' History") +
+ theme_minimal()
+
+```
+
+# **Problem 4: Children and hotel reservations**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(modelr)
+library(rsample)
+library(mosaic)
+hotels_dev <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\hotels_dev.csv')
+hotels_val <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\hotels_val.csv')
+
+```
+
+## *Model building*
+
+* model baseline 1
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+hotels_split = initial_split(hotels_dev, prop = 0.8)
+hotels_train = training(hotels_split)
+hotels_test = testing(hotels_split)
+
+baseline1_model = glm(children ~ market_segment + adults + customer_type + is_repeated_guest, data = hotels_train, family = binomial)
+
+coef(baseline1_model) %>% round(0)
+rmse(baseline1_model, hotels_test)
+
+```
+The Out-Of-Sample RMSE we got for this model is 3.1.
+
+* model baseline 2
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+hotels_split2 = initial_split(hotels_dev, prop = 0.8)
+hotels_train2 = training(hotels_split2)
+hotels_test2 = testing(hotels_split2)
+
+baseline2_model = glm(children ~ . - arrival_date, data = hotels_train2, family = binomial)
+
+coef(baseline2_model) %>% round(0)
+rmse(baseline2_model, hotels_test)
+
+```
+The Out-Of-Sample RMSE for the second model is 4.0. Higher than model 1, this shows that the arrival_date variable is an important one for the model. We could use it in our feature engineering for the following model.
+
+* model baseline 3
+
+We will add the arrival date variable to indicate seasonality as the feature engineering for this model. A new two columns will be added as date and month for R to read from and for us to use in the model.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+hotels_dev <- mutate(hotels_dev,
+                       date_n = ymd(arrival_date),
+                       month_n = month(date_n) %>% factor())
+
+hotels_split3 = initial_split(hotels_dev, prop = 0.8)
+hotels_train3 = training(hotels_split3)
+hotels_test3 = testing(hotels_split3)
+
+baseline3_model = glm(children ~ market_segment + adults + customer_type + is_repeated_guest + month_n, data = hotels_train3, family = binomial)
+
+rmse(baseline3_model, hotels_test3)
+```
+RMSE for this model 3.17 I couldn't improve it more than model baseline1.
+
+## *Model Validation: step 1*
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+hotels_val <- mutate(hotels_val,
+                       date_n = ymd(arrival_date),
+                       month_n = month(date_n) %>% factor())
+
+hotels_split3 = initial_split(hotels_val, prop = 0.8)
+hotels_train3 = training(hotels_split3)
+hotels_test3 = testing(hotels_split3)
+
+baseline3_model = glm(children ~ market_segment + adults + customer_type + is_repeated_guest + month_n, data = hotels_train3, family = binomial)
+
+rmse(baseline3_model, hotels_test3)
+
+```
+RMSE here is 3.15 based on the new dataset hotels_val.
+
+## *Model Validation: step 2*
+
+Couldn't Run the below code:
+
+hotel_dev_split = initial_split(hotels_dev, prop = 0.8)
+hotel_dev_train = training(hotel_dev_split)
+hotel_dev_test = testing(hotel_dev_split)
+
+childX <- model.matrix(children ~ (.-arrival_date)^2 -1, data = hotel_dev_train)
+childY <- hotel_dev_train$children
+
+childLasso <- cv.glmnet(x = childX, y = childY, alpha = 1, family = "binomial", nfold = 20, trace.it = 1, standardize = FALSE)
+
+testMatrix = model.matrix(children ~ (.-arrival_date)^2 -1, data = hotel_dev_test)
+
+hotel_dev_test = mutate(.data = hotel_dev_test, childPred3 = predict(childLasso, newx = Xtest, type = "class", s = 'lambda.min'))
+
+Confused_best_child = table(y = hotel_dev_test$children, yhat_Lasso = hotel_dev_test$childPred3)
+
+Confused_best_child
