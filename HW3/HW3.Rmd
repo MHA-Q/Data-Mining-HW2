@@ -1,0 +1,356 @@
+---
+title: "ECO 395 Homework 3: Mohammed Alqahtani"
+output: md_document
+---
+## What causes what?
+
+**(1) Why can’t I just get data from a few different cities and run the regression of “Crime” on “Police” to understand how more cops in the streets affect crime? (“Crime” refers to some measure of crime rate and “Police” measures the number of cops in a city.)**
+
+Because of the endogeneity issue, which means a correlation exists between the police variable and the error term in the regression (Crime on Police). In other words, when a city already has high crime rates, the number of cops tends to be high already. Therefore, fitting a regression with an endogeneity issue will give biased results. Solutions to endogeneity vary based on the situation, but some of them could be:
+
+1- Find and include omitted variables.
+2- Find and include a proxy variable in the model.
+3- Using a fixed effect estimator with panel data eliminates individual-specific effects.
+4- Use Instrument Variable (IV) to replace the endogenous variable with a predicted value that has only exogenous shocks.
+
+**2- How were the researchers from UPenn able to isolate this effect? Briefly describe their approach and discuss their result in the “Table 2” below, from the researchers' paper.**
+
+The researchers have used the "Terror Alert" variable to replace the effect of raising the number of cops since it is an exogenous variable in the crime model, which could solve the endogeneity issue. However, they have also assumed that "Terror Alert" might not be a good proxy since the number of tourists might decrease when there is a high Terror Alert. To consider that, they have isolated the effect of metro ridership by including log(midday ridership) as a variable in the regression. So, the first column is the uncontrolled effect which says that when Terror Alert elevates (cops on the street increases), the daily crime rate is expected to decrease by 7.32. However, when they control the metro ridership, they still expect a decline in the number of crimes by 6.1. As a result, raising the number of cops would decrease the number of crimes in DC.
+
+**3- Why did they have to control for Metro ridership? What was that trying to capture?**
+
+They assumed that crime might decrease if the number of tourists declined during high alert days. So, their results might be biased. Their methodology uses the "Terror Alert" variable as a proxy to "Police" since they have a high correlation. At the same time, they used Metro ridership as a proxy for tourism in DC. They did that because they assumed that crimes and tourists have a high correlation, and by having higher terror alerts, the number of crimes might decrease because fewer tourists would visit DC. So, by adding Metro ridership in the regression model, they were able to control for the effect of tourism and to have the isolated impact of Terror Alert, which is a proxy of "Police". In other words, after controlling for metro ridership, the number of daily crimes in DC is expected to decrease by 6.1 when the Terror Alert elevates.
+
+**4- Below I am showing you "Table 4" from the researchers' paper. Just focus on the first column of the table. Can you describe the model being estimated here? What is the conclusion?**
+
+In this table, the researchers included the district fixed effects in the regression by using the district variable as an interaction variable with "High Alert" to control the different patterns of crimes between districts when "Terror Alert" elevates. They assumed that most of the cops would be in District 1 since The White House is there. So, when there is an order to the police to prioritize district 1, that might affect the other districts. So, they controlled for this effect by estimating the partial effect of High Alert, depending on whether it is in District 1 or else. 
+They have found out that when High Alert elevates, the number of daily crimes is expected to decrease by 2.6 in District 1. It would also be expected to decrease in the other districts by less than 1. They have also included the log midday ridership to isolate the tourism effect in the regression. The interpretation is that for every 1% increase in midday ridership, the number of daily crimes is expected to increase by 2.5, showing a high correlation between crimes and the proxy of tourism. So, it makes sense to isolate the tourism effect in the regression model.
+
+## Tree modeling: dengue cases
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(lubridate)
+library(randomForest)
+library(gbm)
+library(pdp)
+library(modelr)
+library(rsample)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(textir)
+library(corrplot)
+library(gridExtra)
+library(GGally)
+library(e1071)
+library(ggthemes)
+library(scales)
+library(class) 
+library(ggmap)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+dengue <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\dengue.csv')
+
+set.seed(430)
+dengue$season = factor(dengue$season)
+dengue$city = factor(dengue$city)
+
+dengue_split =  initial_split(dengue, prop=0.8)
+dengue_train = training(dengue_split)
+dengue_test  = testing(dengue_split)
+
+```
+
+First, we use CART model.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+dengue_tree_train = rpart(total_cases ~ city + season + specific_humidity +precipitation_amt, data=dengue_train,
+              control = rpart.control(cp = 0.000015))
+
+# CV error is within 1 std err of the minimum
+
+cp_1se = function(my_tree) {
+  out = as.data.frame(my_tree$cptable)
+  thresh = min(out$xerror + out$xstd)
+  cp_opt = max(out$CP[out$xerror <= thresh])
+  cp_opt
+}
+
+cp_1se(dengue_tree_train)
+
+
+# this function actually prunes the tree at that level
+prune_1se = function(my_tree) {
+  out = as.data.frame(my_tree$cptable)
+  thresh = min(out$xerror + out$xstd)
+  cp_opt = max(out$CP[out$xerror <= thresh])
+  prune(my_tree, cp=cp_opt)
+}
+
+# let's prune our tree at the 1se complexity level
+dengue_tree_train_prune = prune_1se(dengue_tree_train)
+
+rpart.plot(dengue_tree_train_prune, digits=-5, type=4, extra=1)
+
+plotcp(dengue_tree_train_prune)
+
+
+```
+
+Now we use random forest model.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+
+forest1 = randomForest(total_cases ~ city + season + specific_humidity + precipitation_amt,
+                       data=dengue_train, na.action = na.exclude)
+
+plot(forest1)
+
+yhat_test_dengue = predict(forest1, dengue_test)
+plot(yhat_test_dengue, dengue_test$total_cases)
+
+varImpPlot(forest1)
+
+```
+
+Finally, we model by using Boosting algorithm with Gaussian and Poisson distributions.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+forest1 = randomForest(total_cases ~ city + season + specific_humidity + precipitation_amt,
+                       data=dengue_train, na.action = na.exclude)
+
+boost1 = gbm(total_cases ~ city + season + specific_humidity + precipitation_amt, 
+               data = dengue_train,
+               interaction.depth=4, n.trees=500, shrinkage=.01)
+
+gbm.perf(boost1)
+
+yhat_test_gbm = predict(boost1, dengue_test, n.trees=350)
+
+rmse(boost1, dengue_test)
+
+boost2 = gbm(total_cases ~ city + season + specific_humidity + precipitation_amt, 
+             data = dengue_train, distribution='poisson',
+             interaction.depth=4, n.trees=350, shrinkage=.01)
+
+yhat_test_gbm2 = predict(boost2, dengue_test, n.trees=350, type='response')
+
+(yhat_test_gbm2 - dengue_test$total_cases)^2 %>% mean %>% sqrt
+
+summary(boost1)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+rmse_dengue_1 = modelr::rmse(dengue_tree_train_prune, dengue_test)
+rmse_dengue_2 = modelr::rmse(forest1, dengue_test)  # a lot lower!
+rmse_dengue_3 = modelr::rmse(boost1, dengue_test)
+rmse_dengue_4 = (yhat_test_gbm2 - dengue_test$total_cases)^2 %>% mean %>% sqrt
+
+models_dengue_summary = data.frame(
+CART_RMSE = rmse_dengue_1,
+RForest_RMSE = rmse_dengue_2,
+Normal_Boost_RMSE = rmse_dengue_3,
+Poisson_Boost_RMSE = rmse_dengue_4)
+
+models_dengue_summary
+
+```
+
+Based on the out of sample RMSE, the Gaussian Booster model seems to have the best prediction. 
+
+plotting the partial dependence of 4 variables:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+plot(boost1, 'specific_humidity')
+plot(boost1, 'precipitation_amt')
+plot(boost1, 'season')
+plot(boost1, 'city')
+
+```
+
+The graphs above show the partial dependence (marginal effects) of the chosen variables on total cases of dengue based on the Gaussian boosting model. We have included all 4 variables since all of them seems interesting, especially with the high difference between the two cities, and the Fall season with the other seasons.
+
+## Predictive model building: green certification
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+greenbuildings <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\greenbuildings.csv')
+
+set.seed(488)
+greenbuildings$renovated = factor(greenbuildings$renovated)
+greenbuildings$class_a = factor(greenbuildings$class_a)
+greenbuildings$class_b = factor(greenbuildings$class_b)
+greenbuildings$LEED = factor(greenbuildings$LEED)
+greenbuildings$Energystar = factor(greenbuildings$Energystar)
+greenbuildings$green_rating = factor(greenbuildings$green_rating)
+greenbuildings$net = factor(greenbuildings$net)
+greenbuildings$amenities = factor(greenbuildings$amenities)
+
+greenbuildings1 = greenbuildings %>%
+  mutate(revenue = Rent*leasing_rate)
+
+set.seed(488)
+greenbuildings1_split =  initial_split(greenbuildings1, prop=0.8)
+greenbuildings1_split_train = training(greenbuildings1_split)
+greenbuildings1_split_test  = testing(greenbuildings1_split)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+set.seed(488)
+forest_green = randomForest(revenue ~ . , data=greenbuildings1_split_train, na.action = na.exclude)
+
+plot(forest_green)
+
+yhat_test_green = predict(forest_green, greenbuildings1_split_test)
+plot(yhat_test_green, greenbuildings1_split_test$revenue)
+
+varImpPlot(forest_green)
+
+rmse_green1 = modelr::rmse(forest_green, greenbuildings1_split_test)
+  
+set.seed(488)
+
+forest_green2 = randomForest(
+  revenue ~ Rent + City_Market_Rent + leasing_rate + Electricity_Costs + size + CS_PropertyID + stories + age +
+  green_rating, data=greenbuildings1_split_train, na.action = na.exclude
+  )
+  
+rmse_green2 = modelr::rmse(forest_green2, greenbuildings1_split_test)  
+  
+set.seed(488)
+
+forest_green3 = randomForest(
+  revenue ~ Rent + City_Market_Rent + leasing_rate + Electricity_Costs + size + CS_PropertyID + stories + age +
+  hd_total07 + total_dd_07 + total_dd_07 + green_rating, data=greenbuildings1_split_train, na.action = na.exclude
+  )
+
+rmse_green3 = modelr::rmse(forest_green3, greenbuildings1_split_test)  
+
+boost_green = gbm(
+  revenue ~ Rent + City_Market_Rent + leasing_rate + Electricity_Costs + size + CS_PropertyID + stories +
+  green_rating, data = greenbuildings1_split_train, interaction.depth=4, n.trees=350, shrinkage=.02
+  )
+
+rmse_green4 = modelr::rmse(boost_green, greenbuildings1_split_test)  
+  
+models_green_summary = data.frame(
+RFM1_rmse = rmse_green1,
+RFM2_rmse = rmse_green2,
+RFM3_rmse = rmse_green3,
+Boost_rmse = rmse_green4)
+
+models_green_summary
+
+yhat_green_gbm = predict(boost_green, greenbuildings1_split_test, n.trees=350)
+
+plot(boost_green, 'green_rating')
+  
+p4 = pdp::partial(boost_green, pred.var = 'green_rating', n.trees=350)
+p4
+
+```
+
+This exercise aims to predict the revenue per square foot per calendar year of about 8,000 commercial rental properties across the US. In addition, some of those properties are green certified which means they got green certification from either LEED or Energystar. So another question we want to answer is whether being green-certified will raise your revenue or not. So now, let's move on to the methodology used to predict the revenue. First of all, I have mutated a new column to calculate the revenue per square foot per calendar year based on the original data. To do that, we take the product of rent and leasing_rate. We need to do that to get unbiased prediction results since the occupancy or the rent_rate alone won't reflect the revenue.
+Next, we used the factor command on the 0/1 variables to ensure they were dummy variables. Then, we split the data into a training set (80%) and a testing set (20%). Finally, fit the model to predict revenue using the random forest model. The first model used is the base model, basically by regressing revenue on all variables, then checking for the importance of each variable to try other models and compare them based on the results of their root mean squared errors. Now we try other possible models. 
+Based on their importance, we can notice how green_rating is not an important variable in the model, which indicates that green certification won't have a significant partial effect on the revenue. However, I have to include it to observe the real partial effect using the partial dependence algorithm. So, after the base model, we included nine variables for the second model with different importance levels. The 3rd model had 12 variables with more less significant variables. We checked the RMSE for each model and compared it with what we got in the base model to ensure that we didn’t overfit the model; the second model with the nine variables got a slightly lower RMSE than the first model. 
+However, since we are looking for the best predictive model, we tried a third model using the gradient boosting model with the same variables as the random forest model. After trying different shrinkage rates, we got a better RMSE (132) than the random forest model (167). So, we selected the boosting model to answer the question of how much green certification will affect the revenue, assuming all other variables are constant. So, I predicted the average value for both certified and non-certified, and as we can see, it has no partial effect at all, the values are the same and the plot gives us the same answer.
+
+## Predictive model building: California housing
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+CAhousing <- read.csv(file = 'C:\\Users\\Mo. Al-Qahtani\\Desktop\\CAhousing.csv')
+
+CAhousing1 = CAhousing %>%
+  mutate(totalRooms_st = totalRooms/households) %>%
+  mutate(totalBedrooms_st = totalBedrooms/households)
+
+set.seed(1208)
+CAhousing1_split =  initial_split(CAhousing1, prop=0.8)
+CAhousing1_split_train = training(CAhousing1_split)
+CAhousing1_split_test  = testing(CAhousing1_split)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+forest_CA1 = randomForest(medianHouseValue ~ . ,data=CAhousing1_split_train, na.action = na.exclude)
+
+varImpPlot(forest_CA1)
+
+rmse_CA1 = modelr::rmse(forest_CA1, CAhousing1_split_test)
+
+forest_CA2 = randomForest(
+  medianHouseValue ~ medianIncome + longitude + latitude + 
+  totalRooms_st, data=CAhousing1_split_train, na.action = na.exclude
+  )
+  
+rmse_CA2 = modelr::rmse(forest_CA2, CAhousing1_split_test)
+
+forest_CA3 = randomForest(
+  medianHouseValue ~ medianIncome + longitude + latitude + totalRooms_st + population + 
+  housingMedianAge, data=CAhousing1_split_train, na.action = na.exclude
+  ) 
+ 
+rmse_CA3 = modelr::rmse(forest_CA3, CAhousing1_split_test)
+    
+boost_CA = gbm(
+  medianHouseValue ~ medianIncome + longitude + latitude + totalRooms_st + population + 
+  housingMedianAge, data = CAhousing1_split_train, interaction.depth=4, n.trees=350, shrinkage=.08
+  )
+
+rmse_boost = modelr::rmse(boost_CA, CAhousing1_split_test)
+  
+yhat_test_CA3 = predict(forest_CA3, CAhousing1_split_test)
+
+CAhousing1_split_test1 = CAhousing1_split_test %>%
+  mutate(yhat = yhat_test_CA3) 
+
+CAhousing1_split_test1 = CAhousing1_split_test1 %>%  
+mutate (resid =  medianHouseValue - yhat)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+CA_plot_org = ggplot(CAhousing1) +
+ aes(x = longitude, y = latitude, colour = medianHouseValue) +
+ geom_point(shape = "circle", size = 1.5) + 
+ labs(title = "California Median House Value", 
+ subtitle = "Original Data Plot") +
+ theme_minimal() + scale_color_continuous(labels = scales::comma)
+
+
+CA_plot_yhat = ggplot(CAhousing1_split_test1) +
+ aes(x = longitude, y = latitude, colour = yhat) +
+ geom_point(shape = "circle", size = 1.5)  +
+ labs(title = "California Median House Value", 
+ subtitle = "Predicted Plot") +
+ theme_minimal() + scale_color_continuous(labels = scales::comma)
+
+
+CA_plot_resid = ggplot(CAhousing1_split_test1) +
+ aes(x = longitude, y = latitude, colour = resid) +
+ geom_point(shape = "circle", size = 1.5) +
+ labs(title = "California Median House Value", subtitle = "Residuals Plot") +
+ theme_minimal() + scale_color_continuous(labels = scales::comma)
+
+CA_plot_org
+CA_plot_yhat
+CA_plot_resid
+
+```
+
+For this model, the aim was to predict the median house value in California State. To do that, we used machine learning tools to provide us with reliable predictions. So, I have used the random forest model, which utilizes the interaction effects of the variables. First, we mutated the dataset by adding new columns to standardize the total rooms and total bedrooms by dividing each variable by the households variable. Then, we split the data into a training set and a testing set and regressed the median house value on all the other variables to test for the importance of each variable afterward. Next, we did two other specification models with different variables based on the results of the variables' importance. The third model has the lowest RMSE, which equals 47,989. Finally, we tried the gradient boosting model, with many different shrinkage rates, to check if we could get a better performing model, but we could not, as the RMSE we got was not better than the random forest model. So, we decided to continue with the random forest model and predict the median housing values based on the testing set.
